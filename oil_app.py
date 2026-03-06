@@ -3,217 +3,337 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
-import time
-import requests
+import feedparser
+from streamlit_autorefresh import st_autorefresh
 
-# --- CONFIG ---
-st.set_page_config(page_title="Global Energy Terminal 2026", layout="wide")
+# ----------------------------------------------------
+# PAGE CONFIG
+# ----------------------------------------------------
 
-country = "India"
-daily_volume = 5000000
+st.set_page_config(
+    page_title="Global Energy Terminal",
+    layout="wide"
+)
 
-st.title(f"🌍 {country} Energy Desk | 2026 Live")
+# ----------------------------------------------------
+# AUTO REFRESH (15 seconds)
+# ----------------------------------------------------
 
-# -------------------------
-# CACHED DATA FUNCTIONS
-# -------------------------
+st_autorefresh(interval=15000, key="energy_refresh")
 
-@st.cache_data(ttl=60)
-def get_oil_prices():
-    tickers = ['BZ=F', 'CL=F']
-    try:
-        data = yf.download(
-            tickers,
-            period="5d",
-            interval="5m",
-            group_by='ticker',
-            progress=False
-        )
-        return data.ffill()
-    except:
-        return pd.DataFrame()
+# ----------------------------------------------------
+# TERMINAL STYLE
+# ----------------------------------------------------
 
+st.markdown("""
+<style>
+
+body {
+background-color:#0a0a0a;
+}
+
+[data-testid="metric-container"] {
+background-color:#111;
+border:1px solid #333;
+padding:10px;
+border-radius:6px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# ----------------------------------------------------
+# DATA FUNCTIONS
+# ----------------------------------------------------
 
 @st.cache_data(ttl=120)
-def get_gas_prices():
-    tickers = ['NG=F', 'JKM=F', 'TTF=F', 'EURUSD=X']
+def load_energy_prices():
+
+    tickers = [
+        "BZ=F",   # Brent
+        "CL=F",   # WTI
+        "NG=F",   # Henry Hub
+        "TTF=F",  # Dutch TTF
+        "EURUSD=X",
+        "DX-Y.NYB",
+        "^TNX"
+    ]
+
     try:
-        data = yf.download(
+        df = yf.download(
             tickers,
             period="5d",
             interval="15m",
-            group_by='ticker',
+            group_by="ticker",
             progress=False
         )
-        return data.ffill()
+
+        return df.ffill()
+
     except:
         return pd.DataFrame()
 
+# ----------------------------------------------------
+# LOAD DATA
+# ----------------------------------------------------
 
-# -------------------------
-# FETCH OIL DATA
-# -------------------------
+data = load_energy_prices()
 
-oil_data = get_oil_prices()
-
-if oil_data.empty:
-    st.error("Oil price data could not be loaded.")
+if data.empty:
+    st.error("Market data unavailable")
     st.stop()
 
-brent_series = oil_data['BZ=F']['Close'].dropna() if 'BZ=F' in oil_data else pd.Series()
-wti_series = oil_data['CL=F']['Close'].dropna() if 'CL=F' in oil_data else pd.Series()
+def series(ticker):
 
-# -------------------------
-# FETCH GAS DATA
-# -------------------------
+    try:
+        return data[ticker]["Close"].dropna()
+    except:
+        return pd.Series()
 
-gas_data = get_gas_prices()
+brent = series("BZ=F")
+wti = series("CL=F")
+ng = series("NG=F")
+ttf = series("TTF=F")
+eurusd = series("EURUSD=X")
+dxy = series("DX-Y.NYB")
+us10y = series("^TNX")
 
-ng_series = gas_data['NG=F']['Close'].dropna() if 'NG=F' in gas_data else pd.Series()
-jkm_series = gas_data['JKM=F']['Close'].dropna() if 'JKM=F' in gas_data else pd.Series()
-ttf_series = gas_data['TTF=F']['Close'].dropna() if 'TTF=F' in gas_data else pd.Series()
-eurusd_series = gas_data['EURUSD=X']['Close'].dropna() if 'EURUSD=X' in gas_data else pd.Series()
+# ----------------------------------------------------
+# PRICE EXTRACTION
+# ----------------------------------------------------
 
-# Convert TTF (EUR/MWh) → USD/MMBtu
-if not ttf_series.empty and not eurusd_series.empty:
-    ttf_usd_mmbtu = (ttf_series * eurusd_series) / 3.412
+def last(series):
+    return series.iloc[-1] if not series.empty else 0
+
+brent_price = last(brent)
+wti_price = last(wti)
+ng_price = last(ng)
+
+if not ttf.empty and not eurusd.empty:
+    ttf_usd = (ttf * eurusd) / 3.412
 else:
-    ttf_usd_mmbtu = pd.Series()
+    ttf_usd = pd.Series()
 
-# -------------------------
-# SAFE PRICE EXTRACTION
-# -------------------------
+ttf_price = last(ttf_usd)
 
-brent_price = brent_series.iloc[-1] if not brent_series.empty else 0
-wti_price = wti_series.iloc[-1] if not wti_series.empty else 0
-ng_price = ng_series.iloc[-1] if not ng_series.empty else 0
-jkm_price = jkm_series.iloc[-1] if not jkm_series.empty else 0
-ttf_price = ttf_usd_mmbtu.iloc[-1] if not ttf_usd_mmbtu.empty else 0
+dxy_price = last(dxy)
+us10y_price = last(us10y)
 
-# -------------------------
-# TOP METRICS
-# -------------------------
+# ----------------------------------------------------
+# LIVE TERMINAL TICKER
+# ----------------------------------------------------
 
-m1, m2, m3, m4, m5, m6 = st.columns(6)
+ticker_html = f"""
+<div style="
+background:#000;
+padding:12px;
+font-family:monospace;
+color:#00ff9f;
+font-size:16px;
+border-bottom:1px solid #333;
+">
 
-m1.metric("Brent (ICE)", f"${brent_price:.2f}")
-m2.metric("WTI (NYMEX)", f"${wti_price:.2f}")
-m3.metric("NYMEX NG", f"${ng_price:.2f}/MMBtu")
-m4.metric("JKM LNG", f"${jkm_price:.2f}/MMBtu")
-m5.metric("TTF (USD adj)", f"${ttf_price:.2f}/MMBtu")
-m6.metric("Last Sync", datetime.now().strftime("%H:%M:%S"))
+BRENT {brent_price:.2f} |
+WTI {wti_price:.2f} |
+HENRY HUB {ng_price:.2f} |
+TTF {ttf_price:.2f} |
+DXY {dxy_price:.2f} |
+US10Y {us10y_price:.2f}
 
-st.markdown("---")
+</div>
+"""
 
-# -------------------------
+st.markdown(ticker_html, unsafe_allow_html=True)
+
+# ----------------------------------------------------
+# TITLE
+# ----------------------------------------------------
+
+st.title("🌍 Global Energy Terminal")
+
+# ----------------------------------------------------
+# METRICS
+# ----------------------------------------------------
+
+m1,m2,m3,m4,m5 = st.columns(5)
+
+m1.metric("Brent", f"${brent_price:.2f}")
+m2.metric("WTI", f"${wti_price:.2f}")
+m3.metric("Henry Hub", f"${ng_price:.2f}")
+m4.metric("TTF", f"${ttf_price:.2f}")
+m5.metric("Last Update", datetime.now().strftime("%H:%M:%S"))
+
+st.divider()
+
+# ----------------------------------------------------
 # OIL CHART
-# -------------------------
+# ----------------------------------------------------
 
 fig_oil = go.Figure()
 
-if not brent_series.empty:
+if not brent.empty:
     fig_oil.add_trace(go.Scatter(
-        x=brent_series.index,
-        y=brent_series,
+        x=brent.index,
+        y=brent,
         name="Brent",
-        line=dict(color='#00CC96', width=2)
+        line=dict(width=2)
     ))
 
-if not wti_series.empty:
+if not wti.empty:
     fig_oil.add_trace(go.Scatter(
-        x=wti_series.index,
-        y=wti_series,
+        x=wti.index,
+        y=wti,
         name="WTI",
-        line=dict(color='#EF553B', width=2, dash='dot')
+        line=dict(width=2, dash="dot")
     ))
 
 fig_oil.update_layout(
-    title="Crude Oil Price Comparison",
     template="plotly_dark",
-    height=450,
-    hovermode="x unified"
+    height=400,
+    title="Crude Oil"
 )
 
-st.plotly_chart(fig_oil, use_container_width=True)
-
-# -------------------------
+# ----------------------------------------------------
 # GAS CHART
-# -------------------------
-
-st.markdown("### 🔥 Global Natural Gas Benchmarks (USD/MMBtu)")
+# ----------------------------------------------------
 
 fig_gas = go.Figure()
 
-if not ng_series.empty:
+if not ng.empty:
     fig_gas.add_trace(go.Scatter(
-        x=ng_series.index,
-        y=ng_series,
-        name="NYMEX NG",
+        x=ng.index,
+        y=ng,
+        name="Henry Hub",
         line=dict(width=2)
     ))
 
-if not jkm_series.empty:
+if not ttf_usd.empty:
     fig_gas.add_trace(go.Scatter(
-        x=jkm_series.index,
-        y=jkm_series,
-        name="JKM LNG",
-        line=dict(width=2)
-    ))
-
-if not ttf_usd_mmbtu.empty:
-    fig_gas.add_trace(go.Scatter(
-        x=ttf_usd_mmbtu.index,
-        y=ttf_usd_mmbtu,
-        name="TTF (USD adj)",
+        x=ttf_usd.index,
+        y=ttf_usd,
+        name="TTF (USD)",
         line=dict(width=2)
     ))
 
 fig_gas.update_layout(
     template="plotly_dark",
-    height=450,
-    hovermode="x unified"
+    height=400,
+    title="Natural Gas"
 )
 
-st.plotly_chart(fig_gas, use_container_width=True)
+# ----------------------------------------------------
+# MACRO CHART
+# ----------------------------------------------------
 
-# -------------------------
+fig_macro = go.Figure()
+
+if not dxy.empty:
+    fig_macro.add_trace(go.Scatter(
+        x=dxy.index,
+        y=dxy,
+        name="Dollar Index"
+    ))
+
+if not us10y.empty:
+    fig_macro.add_trace(go.Scatter(
+        x=us10y.index,
+        y=us10y,
+        name="US 10Y Yield"
+    ))
+
+fig_macro.update_layout(
+    template="plotly_dark",
+    height=400,
+    title="Macro Drivers"
+)
+
+# ----------------------------------------------------
+# MAIN DASHBOARD
+# ----------------------------------------------------
+
+c1,c2,c3 = st.columns(3)
+
+with c1:
+    st.plotly_chart(fig_oil, use_container_width=True)
+
+with c2:
+    st.plotly_chart(fig_gas, use_container_width=True)
+
+with c3:
+    st.plotly_chart(fig_macro, use_container_width=True)
+
+# ----------------------------------------------------
 # SPREADS
-# -------------------------
+# ----------------------------------------------------
 
-spread1 = jkm_price - ng_price
+st.subheader("Energy Market Spreads")
+
+spread1 = brent_price - wti_price
 spread2 = ttf_price - ng_price
 
-s1, s2 = st.columns(2)
+s1,s2 = st.columns(2)
 
-s1.metric("JKM – NG Spread", f"${spread1:.2f}")
-s2.metric("TTF – NG Spread", f"${spread2:.2f}")
+s1.metric("Brent – WTI", f"${spread1:.2f}")
+s2.metric("TTF – Henry Hub", f"${spread2:.2f}")
 
-# -------------------------
+# ----------------------------------------------------
+# ALERTS
+# ----------------------------------------------------
+
+st.subheader("⚠️ Energy Market Alerts")
+
+alerts = [
+"OPEC+ meeting expected this month",
+"Red Sea shipping disruptions continue",
+"US crude inventories trending higher"
+]
+
+for a in alerts:
+    st.warning(a)
+
+# ----------------------------------------------------
+# ENERGY NEWS
+# ----------------------------------------------------
+
+st.subheader("📰 Energy News")
+
+try:
+    feed = feedparser.parse("https://www.reuters.com/markets/energy/rss")
+
+    for entry in feed.entries[:6]:
+        st.write("•", entry.title)
+
+except:
+    st.write("News feed unavailable")
+
+# ----------------------------------------------------
 # FINANCIAL IMPACT
-# -------------------------
+# ----------------------------------------------------
 
-st.markdown("### 💰 Oil Financial Impact Analysis")
+st.subheader("Oil Price Impact")
+
+daily_volume = 5000000
 
 impact_df = pd.DataFrame({
-    "Scenario": ["+10 BPS Move", "+100 BPS Move", "+$1.00 Rise"],
-    "Daily Cost Increase": [
-        f"${(daily_volume * brent_price * 0.001):,.2f}",
-        f"${(daily_volume * brent_price * 0.01):,.2f}",
-        f"${daily_volume:,.2f}"
+    "Scenario":[
+        "+10 BPS Move",
+        "+100 BPS Move",
+        "+$1 Price Rise"
     ],
-    "Market Implication": ["Marginal", "Significant", "Major Shift"]
+    "Daily Cost":[
+        f"${daily_volume * brent_price * 0.001:,.0f}",
+        f"${daily_volume * brent_price * 0.01:,.0f}",
+        f"${daily_volume:,.0f}"
+    ]
 })
 
 st.table(impact_df)
 
-csv_data = impact_df.to_csv(index=False).encode('utf-8')
+csv = impact_df.to_csv(index=False).encode()
 
 st.download_button(
-    label="📥 Download Impact Report (CSV)",
-    data=csv_data,
-    file_name=f"energy_report_{datetime.now().strftime('%Y%m%d')}.csv",
-    mime="text/csv"
+    "Download Impact Report",
+    csv,
+    "energy_report.csv",
+    "text/csv"
 )
-
-time.sleep(30)
-st.rerun()
