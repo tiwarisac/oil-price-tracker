@@ -282,14 +282,14 @@ s2.metric("TTF – Henry Hub", f"${spread2:.2f}")
 
 st.subheader("⚠️ Energy Market Alerts")
 
-alerts = [
-"OPEC+ meeting expected this month",
-"Red Sea shipping disruptions continue",
-"US crude inventories trending higher"
-]
+try:
+    feed = feedparser.parse("https://www.reuters.com/markets/energy/rss")
 
-for a in alerts:
-    st.warning(a)
+    for entry in feed.entries[:3]:
+        st.warning(entry.title)
+
+except:
+    st.write("Alert feed unavailable")
 
 # ----------------------------------------------------
 # ENERGY NEWS
@@ -337,3 +337,4 @@ st.download_button(
     "energy_report.csv",
     "text/csv"
 )
+
